@@ -130,6 +130,11 @@ class SautiKit
         $this->request('delete', '/v1/calls/'.rawurlencode($callId).'/supervision');
     }
 
+    public function hangupCall(string $callId): array
+    {
+        return $this->request('post', '/v1/calls/'.rawurlencode($callId).'/hangup');
+    }
+
     private function request(string $method, string $path, array $payload = [], array $headers = []): array
     {
         $apiKey = config('services.sautikit.api_key');

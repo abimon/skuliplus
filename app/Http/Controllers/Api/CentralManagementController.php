@@ -11,6 +11,7 @@ use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -205,16 +206,69 @@ class CentralManagementController extends ApiController
             'phone' => ['nullable', 'string', 'max:80'],
             'email' => ['nullable', 'email', 'max:190'],
             'website' => ['nullable', 'url', 'max:255'],
+            'logo_path' => ['nullable', 'string', 'max:255'],
             'po_box' => ['nullable', 'string', 'max:120'],
             'motto' => ['nullable', 'string', 'max:255'],
+            'mission' => ['nullable', 'string', 'max:5000'],
+            'vision' => ['nullable', 'string', 'max:5000'],
+            'aim' => ['nullable', 'string', 'max:5000'],
+            'primary_color' => ['nullable', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'secondary_color' => ['nullable', 'regex:/^#[0-9A-Fa-f]{6}$/'],
+            'accent_color' => ['nullable', 'regex:/^#[0-9A-Fa-f]{6}$/'],
             'is_active' => ['boolean'],
             'enabled_modules' => ['present', 'array'],
             'enabled_modules.*' => ['string', Rule::in(array_keys(School::MODULES))],
+            'curriculum_ids' => ['sometimes', 'array'],
+            'curriculum_ids.*' => ['integer', 'exists:curricula,id'],
         ]);
 
+        if (isset($data['enabled_modules']) && ! in_array('users', $data['enabled_modules'], true)) {
+            return $this->fail('The People module is required for every school.', 422, [
+                'enabled_modules' => ['The People module is required for every school.'],
+            ]);
+        }
+
+        $curriculumIds = $data['curriculum_ids'] ?? null;
+        unset($data['curriculum_ids']);
         $school->update($data);
+        if ($curriculumIds !== null) {
+            $school->curricula()->sync(collect($curriculumIds)
+                ->mapWithKeys(fn ($id, $index) => [$id => ['is_primary' => $index === 0]])
+                ->all());
+        }
 
         return $this->ok($this->schoolPayload($school->fresh('curricula')));
+    }
+
+    public function updateSchoolLogo(Request $request, School $school): JsonResponse
+    {
+        $this->ensureRole($request, self::CENTRAL_ROLES);
+        $data = $request->validate([
+            'logo' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+        ]);
+
+        if ($school->logo_path) {
+            Storage::disk('public')->delete($school->logo_path);
+        }
+        $school->update(['logo_path' => $data['logo']->store('logos', 'public')]);
+
+        return $this->ok($this->schoolPayload(
+            $school->fresh('curricula')->loadCount('users')
+        ));
+    }
+
+    public function removeSchoolLogo(Request $request, School $school): JsonResponse
+    {
+        $this->ensureRole($request, self::CENTRAL_ROLES);
+
+        if ($school->logo_path) {
+            Storage::disk('public')->delete($school->logo_path);
+            $school->update(['logo_path' => null]);
+        }
+
+        return $this->ok($this->schoolPayload(
+            $school->fresh('curricula')->loadCount('users')
+        ));
     }
 
     public function setSchoolStatus(Request $request, School $school): JsonResponse

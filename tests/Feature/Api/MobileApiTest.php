@@ -4,6 +4,8 @@ use App\Models\School;
 use App\Models\User;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Http\UploadedFile;
 use Laravel\Sanctum\Sanctum;
 
 /**
@@ -189,12 +191,86 @@ test('super admins can open a school detail including modules and branding', fun
     $central->assignRole('super_admin');
     mobileAs($central);
 
-    $this->getJson("/api/central/schools/{$this->school->id}")
+    $this->getJson("/api/central/schools/show/{$this->school->id}")
         ->assertOk()
         ->assertJsonPath('data.name', 'Api Test School')
         ->assertJsonPath('data.motto', 'Learn and grow')
         ->assertJsonPath('data.enabled_modules.1', 'gate')
         ->assertJsonPath('data.enabled_modules.2', 'call_center');
+});
+
+test('super admins can update school profile modules branding and curricula', function () {
+    $curriculum = \App\Models\Curriculum::create([
+        'code' => 'UPDATE',
+        'name' => 'Updated curriculum',
+        'is_active' => true,
+    ]);
+    $central = User::factory()->create(['school_id' => null]);
+    $central->assignRole('super_admin');
+    mobileAs($central);
+
+    $this->putJson("/api/central/schools/{$this->school->id}", [
+        'name' => 'Updated School',
+        'code' => 'APITEST',
+        'type' => 'Day school',
+        'level' => 'Primary',
+        'moe_code' => 'MOE-123',
+        'knec_code' => 'KNEC-123',
+        'county' => 'Nairobi',
+        'sub_county' => 'Westlands',
+        'ward' => 'Parklands',
+        'address' => '1 School Road',
+        'phone' => '+254700000000',
+        'email' => 'school@example.test',
+        'website' => 'https://school.example.test',
+        'logo_path' => 'schools/apitest/logo.png',
+        'po_box' => 'P.O. Box 10',
+        'motto' => 'Learn and grow',
+        'mission' => 'Provide excellent learning.',
+        'vision' => 'A thriving community.',
+        'aim' => 'Support every learner.',
+        'primary_color' => '#123456',
+        'secondary_color' => '#ABCDEF',
+        'accent_color' => '#FEDCBA',
+        'is_active' => true,
+        'enabled_modules' => ['users', 'academics', 'gate'],
+        'curriculum_ids' => [$curriculum->id],
+    ])->assertOk()
+        ->assertJsonPath('data.name', 'Updated School')
+        ->assertJsonPath('data.primary_color', '#123456')
+        ->assertJsonPath('data.mission', 'Provide excellent learning.')
+        ->assertJsonPath('data.enabled_modules.2', 'gate')
+        ->assertJsonPath('data.curricula.0.id', $curriculum->id);
+
+    $this->putJson("/api/central/schools/{$this->school->id}", [
+        'name' => 'Updated School',
+        'code' => 'APITEST',
+        'enabled_modules' => ['academics'],
+    ])->assertUnprocessable()
+        ->assertJsonValidationErrors('enabled_modules');
+});
+
+test('super admins can replace and remove a school logo', function () {
+    Storage::fake('public');
+    $central = User::factory()->create(['school_id' => null]);
+    $central->assignRole('super_admin');
+    mobileAs($central);
+
+    $upload = UploadedFile::fake()->create('school-logo.png', 100, 'image/png');
+    $response = $this->post(
+        "/api/central/schools/{$this->school->id}/logo",
+        ['logo' => $upload],
+        ['Accept' => 'application/json'],
+    )->assertOk();
+
+    $logoPath = $response->json('data.logo_path');
+    expect($logoPath)->toBeString();
+    Storage::disk('public')->assertExists($logoPath);
+
+    $this->deleteJson("/api/central/schools/{$this->school->id}/logo")
+        ->assertOk()
+        ->assertJsonPath('data.logo_path', null);
+    Storage::disk('public')->assertMissing($logoPath);
 });
 
 test('super admins can open curriculum details with levels', function () {

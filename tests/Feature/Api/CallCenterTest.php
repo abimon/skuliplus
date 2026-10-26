@@ -7,6 +7,7 @@ use App\Models\School;
 use App\Models\User;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
 
 beforeEach(function () {
@@ -58,6 +59,64 @@ test('a call center agent can place a call and retrieve its school call history'
         ->assertOk()
         ->assertJsonCount(1, 'data')
         ->assertJsonPath('data.0.to', '+254712345678');
+});
+
+test('a mobile call center agent can obtain a short-lived WebRTC token', function () {
+    Http::fake([
+        'https://api.sautikit.com/v1/webrtc/token' => Http::response([
+            'token' => 'mobile-short-lived-token',
+            'endpoint' => 'wss://webrtc.example.test',
+            'protocol' => 'hd-protocol',
+            'turnServer' => ['urls' => 'turn:turn.example.test'],
+        ]),
+    ]);
+
+    $this->getJson('/api/call-center/webrtc-token')
+        ->assertOk()
+        ->assertJsonPath('data.token', 'mobile-short-lived-token')
+        ->assertJsonPath('data.endpoint', 'wss://webrtc.example.test');
+});
+
+test('mobile WebRTC sessions are recorded idempotently for their school', function () {
+    $payload = ['to' => '+254712345678', 'session_id' => 'HD_mobile_session_1'];
+
+    $this->postJson('/api/call-center/calls/active', $payload)
+        ->assertCreated()
+        ->assertJsonPath('data.session_id', 'HD_mobile_session_1')
+        ->assertJsonPath('data.status', 'initiated');
+    $this->postJson('/api/call-center/calls/active', $payload)
+        ->assertOk()
+        ->assertJsonPath('data.session_id', 'HD_mobile_session_1');
+
+    expect(CallCenterCall::where('school_id', $this->school->id)->count())->toBe(1);
+});
+
+test('a mobile call center agent can end a recorded call for everyone', function () {
+    $call = CallCenterCall::create([
+        'school_id' => $this->school->id,
+        'initiated_by' => $this->agent->id,
+        'idempotency_key' => 'mobile-hangup',
+        'client_request_id' => (string) Str::uuid(),
+        'provider_call_id' => 'provider-hangup-call',
+        'session_id' => 'HD_mobile_hangup',
+        'direction' => 'outbound',
+        'from_number' => '+254200000001',
+        'to_number' => '+254712345678',
+        'status' => 'answered',
+    ]);
+    Http::fake([
+        'https://api.sautikit.com/v1/calls/provider-hangup-call/hangup' => Http::response([
+            'call_id' => 'provider-hangup-call',
+            'status' => 'hung_up',
+        ]),
+    ]);
+
+    $this->postJson("/api/call-center/calls/{$call->id}/hangup")
+        ->assertOk()
+        ->assertJsonPath('data.requested', true);
+
+    Http::assertSent(fn ($request) => $request->method() === 'POST'
+        && str_ends_with($request->url(), '/v1/calls/provider-hangup-call/hangup'));
 });
 
 test('an idempotency key does not place a duplicate call', function () {

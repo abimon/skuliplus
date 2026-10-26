@@ -97,6 +97,75 @@ class CallCenterController extends ApiController
         return $this->ok($this->callPayload($call), [], 201);
     }
 
+    public function webrtcToken(Request $request, SautiKit $sautiKit): JsonResponse
+    {
+        $school = $this->ensureSchoolModule($request, 'call_center');
+        abort_unless($this->user($request)->can('call_center.manage'), 403, 'You do not have access to this resource.');
+
+        $clientName = "skuliplus-school-{$school->id}-user-{$this->user($request)->id}";
+        $token = $sautiKit->mintWebrtcToken($clientName);
+
+        return $this->ok([
+            'token' => $token['token'],
+            'endpoint' => $token['endpoint'],
+            'protocol' => $token['protocol'] ?? 'hd-protocol',
+            'turnServer' => $token['turnServer'] ?? $token['turn_server'] ?? null,
+        ]);
+    }
+
+    public function recordActiveCall(Request $request): JsonResponse
+    {
+        $school = $this->ensureSchoolModule($request, 'call_center');
+        abort_unless($this->user($request)->can('call_center.manage'), 403, 'You do not have access to this resource.');
+
+        $data = $request->validate([
+            'to' => ['required', 'string', 'regex:/^\+[1-9][0-9]{7,14}$/'],
+            'session_id' => ['required', 'string', 'max:255'],
+        ]);
+        $existing = CallCenterCall::where('school_id', $school->id)
+            ->where('session_id', $data['session_id'])
+            ->first();
+        if ($existing) {
+            return $this->ok($this->callPayload($existing));
+        }
+
+        $call = CallCenterCall::create([
+            'school_id' => $school->id,
+            'initiated_by' => $this->user($request)->id,
+            'idempotency_key' => 'webrtc:'.substr(hash('sha256', $data['session_id']), 0, 56),
+            'client_request_id' => (string) Str::uuid(),
+            'session_id' => $data['session_id'],
+            'direction' => 'outbound',
+            'from_number' => config('services.sautikit.from_number') ?? 'WebRTC',
+            'to_number' => $data['to'],
+            'status' => 'initiated',
+        ]);
+        $this->associatePendingEvents($call);
+
+        return $this->ok($this->callPayload($call->fresh()), [], 201);
+    }
+
+    public function hangupCall(Request $request, string $callId, SautiKit $sautiKit): JsonResponse
+    {
+        $school = $this->ensureSchoolModule($request, 'call_center');
+        abort_unless($this->user($request)->can('call_center.manage'), 403, 'You do not have access to this resource.');
+
+        $call = CallCenterCall::where('school_id', $school->id)
+            ->where(function ($query) use ($callId) {
+                $query->where('id', $callId)
+                    ->orWhere('provider_call_id', $callId)
+                    ->orWhere('session_id', $callId);
+            })
+            ->firstOrFail();
+        abort_if(in_array($call->status, ['completed', 'failed'], true), 409, 'This call has already ended.');
+
+        $providerId = $call->provider_call_id ?: $call->session_id;
+        abort_unless($providerId, 409, 'This call cannot be controlled because it has no provider ID.');
+        $sautiKit->hangupCall($providerId);
+
+        return $this->ok(['requested' => true]);
+    }
+
     public function inboundRouting(Request $request): JsonResponse
     {
         $school = $this->ensureSchoolModule($request, 'call_center');

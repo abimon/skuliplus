@@ -7,6 +7,7 @@ use App\Models\SchoolModule;
 use App\Models\User;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Inertia\Testing\AssertableInertia as Assert;
 
 beforeEach(function () {
@@ -122,6 +123,48 @@ test('an authorized operator receives a short-lived browser WebRTC token without
         && $request['role'] === 'dialer'
         && $request['client_name'] === "skuliplus-school-{$this->school->id}-user-{$this->admin->id}"
         && $request->hasHeader('Authorization', 'Bearer test-api-key'));
+});
+
+test('an authorized operator can record a browser-originated WebRTC call', function () {
+    $payload = ['to' => '+254712345678', 'session_id' => 'HD_web_session_1'];
+
+    $this->actingAs($this->admin)
+        ->postJson('/call-center/calls/active', $payload)
+        ->assertCreated()
+        ->assertJsonStructure(['data' => ['id']]);
+    $this->actingAs($this->admin)
+        ->postJson('/call-center/calls/active', $payload)
+        ->assertOk();
+
+    expect(CallCenterCall::where('school_id', $this->school->id)->count())->toBe(1);
+});
+
+test('an authorized operator can end a recorded call for everyone', function () {
+    $call = CallCenterCall::create([
+        'school_id' => $this->school->id,
+        'initiated_by' => $this->admin->id,
+        'idempotency_key' => 'web-hangup',
+        'client_request_id' => (string) Str::uuid(),
+        'session_id' => 'HD_web_hangup',
+        'direction' => 'inbound',
+        'from_number' => '+254712345678',
+        'to_number' => '+254200000001',
+        'status' => 'answered',
+    ]);
+    Http::fake([
+        'https://api.sautikit.com/v1/calls/HD_web_hangup/hangup' => Http::response([
+            'call_id' => 'provider-hangup-call',
+            'status' => 'hung_up',
+        ]),
+    ]);
+
+    $this->actingAs($this->admin)
+        ->postJson("/call-center/calls/{$call->id}/hangup")
+        ->assertOk()
+        ->assertJsonPath('requested', true);
+
+    Http::assertSent(fn ($request) => $request->method() === 'POST'
+        && str_ends_with($request->url(), '/v1/calls/HD_web_hangup/hangup'));
 });
 
 test('an authorized operator can start, change, and stop supervision for a school call', function () {

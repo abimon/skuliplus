@@ -53,6 +53,8 @@ Route::middleware(['auth'])->group(function () {
     Route::middleware('school.module:call_center')->group(function () {
         Route::get('call-center', [CallCenterController::class, 'index'])->name('call-center.index');
         Route::post('call-center/calls', [CallCenterController::class, 'store'])->name('call-center.calls.store');
+        Route::post('call-center/calls/active', [CallCenterController::class, 'recordActiveCall'])->name('call-center.calls.active');
+        Route::post('call-center/calls/{callId}/hangup', [CallCenterController::class, 'hangupCall'])->name('call-center.calls.hangup');
         Route::get('call-center/webrtc-token', [CallCenterController::class, 'webrtcToken'])->name('call-center.webrtc-token');
         Route::post('call-center/calls/{providerCallId}/supervision', [CallCenterController::class, 'startSupervision'])->name('call-center.supervision.start');
         Route::patch('call-center/calls/{providerCallId}/supervision', [CallCenterController::class, 'setSupervisionMode'])->name('call-center.supervision.mode');

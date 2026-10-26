@@ -53,6 +53,9 @@ Route::middleware(['auth:sanctum', 'abilities:mobile'])->group(function () {
     // Call center -------------------------------------------------------------
     Route::get('call-center/calls', [CallCenterController::class, 'index']);
     Route::post('call-center/calls', [CallCenterController::class, 'store']);
+    Route::get('call-center/webrtc-token', [CallCenterController::class, 'webrtcToken']);
+    Route::post('call-center/calls/active', [CallCenterController::class, 'recordActiveCall']);
+    Route::post('call-center/calls/{callId}/hangup', [CallCenterController::class, 'hangupCall']);
     Route::get('call-center/inbound-routing', [CallCenterController::class, 'inboundRouting']);
     Route::put('call-center/inbound-routing', [CallCenterController::class, 'configureInboundRouting']);
 
@@ -66,6 +69,8 @@ Route::middleware(['auth:sanctum', 'abilities:mobile'])->group(function () {
         Route::get('schools', [CentralManagementController::class, 'schools']);
         Route::get('schools/show/{school}', [CentralManagementController::class, 'showSchool']);
         Route::post('schools', [CentralManagementController::class, 'storeSchool']);
+        Route::post('schools/{school}/logo', [CentralManagementController::class, 'updateSchoolLogo']);
+        Route::delete('schools/{school}/logo', [CentralManagementController::class, 'removeSchoolLogo']);
         Route::put('schools/{school}', [CentralManagementController::class, 'updateSchool']);
         Route::patch('schools/{school}/status', [CentralManagementController::class, 'setSchoolStatus']);
         Route::get('curricula', [CentralManagementController::class, 'curricula']);
@@ -143,5 +148,5 @@ Route::middleware(['auth:sanctum', 'abilities:mobile'])->group(function () {
         Route::get('children/{student}', [FamilyController::class, 'child']);
     });
 
-    Route::get('user', fn(Request $request) => $request->user());
+    Route::get('user', fn (Request $request) => $request->user());
 });

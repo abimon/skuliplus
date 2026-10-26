@@ -2,7 +2,7 @@ import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, router, useForm } from '@inertiajs/react';
 import { Client, type ClientConfig, type Supervision, type SupervisionMode } from '@sautikit/webrtc';
-import { ArrowDownLeft, ArrowUpRight, Headphones, PhoneCall, Settings2, Signal, Voicemail } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Headphones, Mic, MicOff, PhoneCall, PhoneOff, Settings2, Signal, Speaker, Voicemail } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 type Call = {
@@ -20,12 +20,22 @@ type Call = {
 };
 
 type Routing = { number_id: string; agent_id: string } | null;
-type SupervisionState = { callId: string; mode: SupervisionMode; client: Client; supervision: Supervision };
+type SupervisionState = { callId: string; mode: SupervisionMode; client: Client; supervision: Supervision; muted: boolean };
 type WebRtcToken = {
     token: string;
     endpoint: string;
     protocol?: string;
     turnServer?: ClientConfig['turnServer'];
+};
+type AudioOutputElement = HTMLAudioElement & {
+    setSinkId?: (sinkId: string) => Promise<void>;
+};
+type ActiveCall = {
+    client: Client;
+    to: string;
+    sessionId: string | null;
+    status: 'calling' | 'ringing' | 'connected';
+    muted: boolean;
 };
 
 const supervisionModes: { mode: SupervisionMode; label: string }[] = [
@@ -130,6 +140,15 @@ export default function CallCenterIndex({
     const [changingMode, setChangingMode] = useState(false);
     const [leavingCall, setLeavingCall] = useState(false);
     const supervisionRef = useRef<SupervisionState | null>(null);
+    const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
+    const activeCallRef = useRef<ActiveCall | null>(null);
+    const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
+    const [audioOutputId, setAudioOutputId] = useState('default');
+    const [placingCall, setPlacingCall] = useState(false);
+    const [callError, setCallError] = useState<string | null>(null);
+    const [endingCallId, setEndingCallId] = useState<number | null>(null);
+    const remoteAudioRef = useRef<AudioOutputElement | null>(null);
+    const recordedSessionIds = useRef(new Set<string>());
 
     useEffect(() => {
         const refreshCalls = () => {
@@ -148,12 +167,155 @@ export default function CallCenterIndex({
                 supervisionRef.current = null;
                 current.client.destroy();
             }
+            const call = activeCallRef.current;
+            if (call) {
+                call.client.hangup();
+                call.client.destroy();
+                activeCallRef.current = null;
+            }
         };
     }, []);
 
     function setCurrentSupervision(next: SupervisionState | null) {
         supervisionRef.current = next;
         setSupervision(next);
+    }
+
+    function setCurrentCall(next: ActiveCall | null) {
+        activeCallRef.current = next;
+        setActiveCall(next);
+    }
+
+    async function refreshAudioOutputs() {
+        if (!navigator.mediaDevices?.enumerateDevices) return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        setAudioOutputs(devices.filter((device) => device.kind === 'audiooutput'));
+    }
+
+    async function chooseAudioOutput(deviceId: string) {
+        const audio = remoteAudioRef.current;
+        if (!audio?.setSinkId) {
+            setCallError('This browser does not support selecting an audio output device.');
+            return;
+        }
+        try {
+            await audio.setSinkId(deviceId);
+            setAudioOutputId(deviceId);
+            setCallError(null);
+        } catch (error) {
+            setCallError(error instanceof Error ? error.message : 'Unable to change the audio output.');
+        }
+    }
+
+    async function startCall(event: React.FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+        const to = dialForm.data.to.trim();
+        if (!/^\+[1-9][0-9]{7,14}$/.test(to)) {
+            dialForm.setError('to', 'Enter a valid international phone number.');
+            return;
+        }
+        if (activeCallRef.current || supervisionRef.current) return;
+
+        setPlacingCall(true);
+        setCallError(null);
+        setSupervisionError(null);
+        dialForm.clearErrors();
+        let client: Client | null = null;
+        try {
+            const token = await supervisionRequest<WebRtcToken>('/call-center/webrtc-token', 'GET');
+            const audioElement = remoteAudioRef.current;
+            if (!audioElement) throw new Error('Audio output is not ready.');
+            client = new Client({
+                token: token.token,
+                endpoint: token.endpoint,
+                protocol: token.protocol,
+                turnServer: token.turnServer,
+                audioElement,
+            });
+            client.on('error', (error) => setCallError(error.message));
+            client.on('session', ({ sessionId }) => {
+                const current = activeCallRef.current;
+                if (current?.client !== client) return;
+                setCurrentCall({ ...current, sessionId });
+                void recordWebRtcCall(to, sessionId);
+            });
+            client.on('ringing', () => {
+                const current = activeCallRef.current;
+                if (current?.client === client) setCurrentCall({ ...current, status: 'ringing' });
+            });
+            client.on('answered', () => {
+                const current = activeCallRef.current;
+                if (current?.client === client) setCurrentCall({ ...current, status: 'connected' });
+            });
+            client.on('hangup', () => {
+                if (activeCallRef.current?.client !== client) return;
+                client?.destroy();
+                setCurrentCall(null);
+                dialForm.reset();
+                router.reload({ only: ['calls', 'stats'] });
+            });
+            await waitForRegistration(client);
+            await refreshAudioOutputs();
+            if (audioElement.setSinkId) await audioElement.setSinkId(audioOutputId);
+            await client.call(to);
+            setCurrentCall({ client, to, sessionId: client.sessionId, status: 'calling', muted: false });
+            if (client.sessionId) void recordWebRtcCall(to, client.sessionId);
+            dialForm.reset();
+        } catch (error) {
+            client?.destroy();
+            setCallError(error instanceof Error ? error.message : 'Unable to place the call.');
+        } finally {
+            setPlacingCall(false);
+        }
+    }
+
+    function hangUpActiveCall() {
+        const current = activeCallRef.current;
+        if (!current) return;
+        current.client.hangup();
+        current.client.destroy();
+        setCurrentCall(null);
+        router.reload({ only: ['calls', 'stats'] });
+    }
+
+    function toggleMute() {
+        const current = activeCallRef.current;
+        if (!current) return;
+        if (current.muted) current.client.unmute();
+        else current.client.mute();
+        setCurrentCall({ ...current, muted: !current.muted });
+    }
+
+    function toggleSupervisionMute() {
+        const current = supervisionRef.current;
+        if (!current) return;
+        if (current.muted) current.client.unmute();
+        else current.client.mute();
+        setCurrentSupervision({ ...current, muted: !current.muted });
+    }
+
+    async function recordWebRtcCall(to: string, sessionId: string) {
+        if (recordedSessionIds.current.has(sessionId)) return;
+        recordedSessionIds.current.add(sessionId);
+        try {
+            await supervisionRequest('/call-center/calls/active', 'POST', { to, session_id: sessionId });
+            router.reload({ only: ['calls', 'stats'] });
+        } catch (error) {
+            setCallError(error instanceof Error ? error.message : 'Call history could not be saved.');
+        }
+    }
+
+    async function hangUpRecordedCall(call: Call) {
+        setEndingCallId(call.id);
+        setSupervisionError(null);
+        try {
+            await supervisionRequest(`/call-center/calls/${call.id}/hangup`, 'POST');
+            router.reload({ only: ['calls', 'stats'] });
+        } catch (error) {
+            setSupervisionError(error instanceof Error ? error.message : 'Unable to end this call.');
+        } finally {
+            setEndingCallId(null);
+        }
     }
 
     async function joinCall(call: Call) {
@@ -185,21 +347,24 @@ export default function CallCenterIndex({
                         await supervisionRequest(`/call-center/calls/${encodeURIComponent(id)}/supervision`, 'DELETE');
                     },
                 },
+                audioElement: remoteAudioRef.current ?? undefined,
             };
             if (token.turnServer) clientConfig.turnServer = token.turnServer;
 
             client = new Client(clientConfig);
             client.on('error', (error) => setSupervisionError(error.message));
             await waitForRegistration(client);
+            await refreshAudioOutputs();
             const started = await client.supervise(callId, {
                 mode: 'listen',
                 announce: 'none',
                 label: 'School call centre',
                 notifyAgent: true,
             });
-            const current: SupervisionState = { callId, mode: started.mode, client, supervision: started };
+            const current: SupervisionState = { callId, mode: started.mode, client, supervision: started, muted: false };
             started.on('mode_changed', ({ to }) => {
-                setCurrentSupervision({ ...current, mode: to });
+                const latest = supervisionRef.current;
+                if (latest?.supervision === started) setCurrentSupervision({ ...latest, mode: to });
             });
             started.on('ended', () => {
                 current.client.destroy();
@@ -245,14 +410,6 @@ export default function CallCenterIndex({
         } finally {
             setLeavingCall(false);
         }
-    }
-
-    function placeCall(event: React.FormEvent<HTMLFormElement>) {
-        event.preventDefault();
-        dialForm.post('/call-center/calls', {
-            preserveScroll: true,
-            onSuccess: () => dialForm.reset(),
-        });
     }
 
     function saveRouting(event: React.FormEvent<HTMLFormElement>) {
@@ -304,6 +461,32 @@ export default function CallCenterIndex({
                                 <p className="mt-3 text-2xl font-semibold text-[#203a2a]">{stat.value}</p>
                             </article>
                         ))}
+                        <button
+                            type="button"
+                            disabled={changingMode || leavingCall}
+                            onClick={toggleSupervisionMute}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-[#dfe5dc] bg-white px-3 py-2 text-xs font-semibold text-[#3c6745] disabled:opacity-50"
+                        >
+                            {supervision.muted ? <MicOff aria-hidden="true" className="size-3.5" /> : <Mic aria-hidden="true" className="size-3.5" />}
+                            {supervision.muted ? 'Unmute' : 'Mute'}
+                        </button>
+                        {audioOutputs.length > 0 && (
+                            <label className="flex items-center gap-1.5 text-xs text-[#657469]">
+                                <Speaker aria-hidden="true" className="size-3.5" />
+                                <select
+                                    aria-label="Supervision audio output"
+                                    value={audioOutputId}
+                                    onChange={(event) => void chooseAudioOutput(event.target.value)}
+                                    className="rounded-md border border-[#dfe5dc] bg-white px-2 py-2"
+                                >
+                                    {audioOutputs.map((device, index) => (
+                                        <option key={device.deviceId || index} value={device.deviceId || 'default'}>
+                                            {device.label || `Audio output ${index + 1}`}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        )}
                     </section>
 
                     <div className="mt-7 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.72fr)]">
@@ -319,7 +502,7 @@ export default function CallCenterIndex({
                                         <p className="mt-1 text-sm text-[#718076]">Dial an E.164 number using your configured SautiKit caller ID.</p>
                                     </div>
                                 </div>
-                                <form onSubmit={placeCall} className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-start">
+                                <form onSubmit={(event) => void startCall(event)} className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-start">
                                     <label className="min-w-0 flex-1 text-xs font-medium text-[#657469]">
                                         Destination phone number
                                         <input
@@ -339,12 +522,72 @@ export default function CallCenterIndex({
                                     </label>
                                     <button
                                         type="submit"
-                                        disabled={dialForm.processing}
+                                        disabled={placingCall || activeCall !== null || supervision !== null}
                                         className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-[#244b35] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#193c2a] disabled:opacity-60 sm:mt-5"
                                     >
-                                        <PhoneCall aria-hidden="true" className="size-4" /> {dialForm.processing ? 'Calling…' : 'Call'}
+                                        <PhoneCall aria-hidden="true" className="size-4" /> {placingCall ? 'Connecting…' : 'Call'}
                                     </button>
                                 </form>
+                                {callError && (
+                                    <p role="alert" className="mt-3 text-sm text-red-700">
+                                        {callError}
+                                    </p>
+                                )}
+                                {activeCall && (
+                                    <div className="mt-4 rounded-md border border-[#dfe5dc] bg-[#f8faf7] p-4">
+                                        <div className="flex flex-wrap items-center justify-between gap-3">
+                                            <div>
+                                                <p className="text-sm font-semibold text-[#244b35]">
+                                                    {activeCall.status === 'connected'
+                                                        ? 'Live call'
+                                                        : activeCall.status === 'ringing'
+                                                          ? 'Ringing'
+                                                          : 'Connecting'}{' '}
+                                                    · {activeCall.to}
+                                                </p>
+                                                <p className="mt-1 text-xs text-[#718076]">Ending this call disconnects the caller and recipient.</p>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                {audioOutputs.length > 0 && (
+                                                    <label className="flex items-center gap-2 text-xs text-[#657469]">
+                                                        <Speaker aria-hidden="true" className="size-4" />
+                                                        <select
+                                                            aria-label="Audio output device"
+                                                            value={audioOutputId}
+                                                            onChange={(event) => void chooseAudioOutput(event.target.value)}
+                                                            className="rounded-md border border-[#dfe5dc] bg-white px-2 py-2"
+                                                        >
+                                                            {audioOutputs.map((device, index) => (
+                                                                <option key={device.deviceId || index} value={device.deviceId || 'default'}>
+                                                                    {device.label || `Audio output ${index + 1}`}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                    </label>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    onClick={toggleMute}
+                                                    className="inline-flex items-center gap-2 rounded-md border border-[#b9cbb9] px-3 py-2 text-xs font-semibold text-[#3c6745]"
+                                                >
+                                                    {activeCall.muted ? (
+                                                        <MicOff aria-hidden="true" className="size-4" />
+                                                    ) : (
+                                                        <Mic aria-hidden="true" className="size-4" />
+                                                    )}
+                                                    {activeCall.muted ? 'Unmute' : 'Mute'}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={hangUpActiveCall}
+                                                    className="inline-flex items-center gap-2 rounded-md bg-[#a94338] px-3 py-2 text-xs font-semibold text-white hover:bg-[#8e352d]"
+                                                >
+                                                    <PhoneOff aria-hidden="true" className="size-4" /> End call for everyone
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </section>
                         )}
 
@@ -466,33 +709,50 @@ export default function CallCenterIndex({
                                                         const aiAgentCall =
                                                             call.direction === 'inbound' && call.provider_number_id === inboundRouting?.number_id;
                                                         const canJoin = call.status === 'answered' && callId && !aiAgentCall;
-                                                        if (aiAgentCall && call.status === 'answered') {
-                                                            return (
-                                                                <span
-                                                                    className="text-xs text-[#849087]"
-                                                                    title="SautiKit does not support supervision of AI-agent calls"
-                                                                >
-                                                                    AI-agent call
-                                                                </span>
-                                                            );
-                                                        }
-                                                        if (!canJoin) return <span className="text-xs text-[#a0aaa2]">—</span>;
-                                                        if (supervision?.callId === callId)
-                                                            return (
-                                                                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#397145]">
-                                                                    <Headphones aria-hidden="true" className="size-3.5" />
-                                                                    Connected
-                                                                </span>
-                                                            );
+                                                        const canEnd = call.status !== 'completed' && call.status !== 'failed';
                                                         return (
-                                                            <button
-                                                                type="button"
-                                                                disabled={pendingCallId !== null || supervision !== null}
-                                                                onClick={() => void joinCall(call)}
-                                                                className="rounded-md border border-[#b9cbb9] px-2.5 py-1.5 text-xs font-semibold text-[#3c6745] hover:bg-[#edf4ec] disabled:cursor-not-allowed disabled:opacity-50"
-                                                            >
-                                                                {pendingCallId === callId ? 'Connecting…' : 'Connect'}
-                                                            </button>
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                {aiAgentCall && call.status === 'answered' ? (
+                                                                    <span
+                                                                        className="text-xs text-[#849087]"
+                                                                        title="SautiKit does not support supervision of AI-agent calls"
+                                                                    >
+                                                                        AI-agent call
+                                                                    </span>
+                                                                ) : supervision?.callId === callId ? (
+                                                                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#397145]">
+                                                                        <Headphones aria-hidden="true" className="size-3.5" />
+                                                                        Connected
+                                                                    </span>
+                                                                ) : canJoin ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={
+                                                                            pendingCallId !== null ||
+                                                                            supervision !== null ||
+                                                                            activeCall !== null ||
+                                                                            endingCallId !== null
+                                                                        }
+                                                                        onClick={() => void joinCall(call)}
+                                                                        className="rounded-md border border-[#b9cbb9] px-2.5 py-1.5 text-xs font-semibold text-[#3c6745] hover:bg-[#edf4ec] disabled:cursor-not-allowed disabled:opacity-50"
+                                                                    >
+                                                                        {pendingCallId === callId ? 'Connecting…' : 'Connect'}
+                                                                    </button>
+                                                                ) : (
+                                                                    <span className="text-xs text-[#a0aaa2]">—</span>
+                                                                )}
+                                                                {canEnd && (
+                                                                    <button
+                                                                        type="button"
+                                                                        disabled={endingCallId !== null}
+                                                                        onClick={() => void hangUpRecordedCall(call)}
+                                                                        className="inline-flex items-center gap-1 rounded-md border border-[#e1c7c1] px-2.5 py-1.5 text-xs font-semibold text-[#a54e3d] hover:bg-[#fff2ef] disabled:cursor-not-allowed disabled:opacity-50"
+                                                                    >
+                                                                        <PhoneOff aria-hidden="true" className="size-3.5" />
+                                                                        {endingCallId === call.id ? 'Ending…' : 'End call'}
+                                                                    </button>
+                                                                )}
+                                                            </div>
                                                         );
                                                     })()}
                                                 </td>
@@ -527,7 +787,8 @@ export default function CallCenterIndex({
                                             Connected to live call
                                         </p>
                                         <p className="mt-1 text-xs text-[#718076]">
-                                            Choose listen, coach the agent privately, or talk to both sides.
+                                            Choose listen, coach the agent privately, or talk to both sides. Disconnect ends only your supervisor
+                                            audio leg; it does not end the customer call.
                                         </p>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
@@ -557,7 +818,9 @@ export default function CallCenterIndex({
                         )}
                         {canManage && (
                             <p className="border-t border-[#e8ece5] px-4 py-3 text-xs text-[#849087] sm:px-5">
-                                Live call controls refresh automatically. Only answered calls are eligible; SautiKit does not support supervision of
+                                <audio ref={remoteAudioRef} id="remoteAudio" autoPlay className="hidden" />
+                                Live call controls refresh automatically. Outbound calls placed here can be ended for everyone. Supervision
+                                disconnects only your staff audio leg. Only answered calls are eligible; SautiKit does not support supervision of
                                 calls handled by an AI agent.
                             </p>
                         )}

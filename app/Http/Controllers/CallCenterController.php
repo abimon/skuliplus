@@ -144,6 +144,62 @@ class CallCenterController extends Controller
         ]);
     }
 
+    public function recordActiveCall(Request $request): JsonResponse
+    {
+        abort_unless($request->user()->can('call_center.manage'), 403);
+        $schoolId = $request->user()->school_id;
+        abort_unless($schoolId, 403);
+
+        $data = $request->validate([
+            'to' => ['required', 'string', 'regex:/^\+[1-9][0-9]{7,14}$/'],
+            'session_id' => ['required', 'string', 'max:255'],
+        ]);
+        $existing = CallCenterCall::where('school_id', $schoolId)
+            ->where('session_id', $data['session_id'])
+            ->first();
+        if ($existing) {
+            return response()->json(['data' => ['id' => $existing->id]], 200);
+        }
+
+        $call = CallCenterCall::create([
+            'school_id' => $schoolId,
+            'initiated_by' => $request->user()->id,
+            'idempotency_key' => 'webrtc:'.substr(hash('sha256', $data['session_id']), 0, 56),
+            'client_request_id' => (string) Str::uuid(),
+            'session_id' => $data['session_id'],
+            'direction' => 'outbound',
+            'from_number' => config('services.sautikit.from_number') ?? 'WebRTC',
+            'to_number' => $data['to'],
+            'status' => 'initiated',
+        ]);
+
+        $this->associatePendingEvents($call);
+
+        return response()->json(['data' => ['id' => $call->id]], 201);
+    }
+
+    public function hangupCall(Request $request, string $callId, SautiKit $sautiKit): JsonResponse
+    {
+        abort_unless($request->user()->can('call_center.manage'), 403);
+        $schoolId = $request->user()->school_id;
+        abort_unless($schoolId, 403);
+
+        $call = CallCenterCall::where('school_id', $schoolId)
+            ->where(function ($query) use ($callId) {
+                $query->where('id', $callId)
+                    ->orWhere('provider_call_id', $callId)
+                    ->orWhere('session_id', $callId);
+            })
+            ->firstOrFail();
+        abort_if(in_array($call->status, ['completed', 'failed'], true), 409, 'This call has already ended.');
+
+        $providerId = $call->provider_call_id ?: $call->session_id;
+        abort_unless($providerId, 409, 'This call cannot be controlled because it has no provider ID.');
+        $sautiKit->hangupCall($providerId);
+
+        return response()->json(['requested' => true]);
+    }
+
     public function startSupervision(Request $request, string $providerCallId, SautiKit $sautiKit): JsonResponse
     {
         abort_unless($request->user()->can('call_center.manage'), 403);
