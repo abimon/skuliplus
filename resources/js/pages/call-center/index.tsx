@@ -19,6 +19,7 @@ type Call = {
     agent: string | null;
 };
 
+type Contact = { id: number; name: string; phone: string; role: string };
 type Routing = { number_id: string; agent_id: string } | null;
 type SupervisionState = { callId: string; mode: SupervisionMode; client: Client; supervision: Supervision; muted: boolean };
 type WebRtcToken = {
@@ -93,6 +94,7 @@ function waitForRegistration(client: Client): Promise<void> {
             window.clearTimeout(timeout);
             client.off('registered');
             client.off('closed');
+            client.off('error');
         };
         const onRegistered = () => {
             cleanup();
@@ -102,19 +104,25 @@ function waitForRegistration(client: Client): Promise<void> {
             cleanup();
             reject(new Error('SautiKit could not establish a WebRTC connection.'));
         };
+        const onError = (error: Error & { code?: string }) => {
+            cleanup();
+            reject(new Error(error.message || 'SautiKit could not register the WebRTC dialer.'));
+        };
         const timeout = window.setTimeout(() => {
             cleanup();
-            reject(new Error('Timed out while connecting to SautiKit.'));
-        }, 30000);
+            reject(new Error('Timed out while registering the SautiKit dialer. Check the connection and dialer permissions.'));
+        }, 90000);
 
         client.on('registered', onRegistered);
         client.on('closed', onClosed);
+        client.on('error', onError);
     });
 }
 
 export default function CallCenterIndex({
     school,
     calls,
+    contacts,
     direction,
     canManage,
     canConfigureInbound,
@@ -123,6 +131,7 @@ export default function CallCenterIndex({
 }: {
     school: { name: string; code: string; county: string | null; logo_path: string | null };
     calls: Call[];
+    contacts: { parents: Contact[]; staff: Contact[] };
     direction: 'all' | 'inbound' | 'outbound';
     canManage: boolean;
     canConfigureInbound: boolean;
@@ -149,6 +158,7 @@ export default function CallCenterIndex({
     const [endingCallId, setEndingCallId] = useState<number | null>(null);
     const remoteAudioRef = useRef<AudioOutputElement | null>(null);
     const recordedSessionIds = useRef(new Set<string>());
+    const callStartingRef = useRef(false);
 
     useEffect(() => {
         const refreshCalls = () => {
@@ -188,8 +198,12 @@ export default function CallCenterIndex({
 
     async function refreshAudioOutputs() {
         if (!navigator.mediaDevices?.enumerateDevices) return;
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        setAudioOutputs(devices.filter((device) => device.kind === 'audiooutput'));
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            setAudioOutputs(devices.filter((device) => device.kind === 'audiooutput'));
+        } catch (error) {
+            setCallError(error instanceof Error ? error.message : 'Unable to list audio output devices.');
+        }
     }
 
     async function chooseAudioOutput(deviceId: string) {
@@ -207,15 +221,21 @@ export default function CallCenterIndex({
         }
     }
 
-    async function startCall(event: React.FormEvent<HTMLFormElement>) {
-        event.preventDefault();
-        const to = dialForm.data.to.trim();
+    async function placeCall(destination: string) {
+        const to = destination.trim();
         if (!/^\+[1-9][0-9]{7,14}$/.test(to)) {
             dialForm.setError('to', 'Enter a valid international phone number.');
             return;
         }
-        if (activeCallRef.current || supervisionRef.current) return;
+        if (callStartingRef.current || activeCallRef.current || supervisionRef.current || stats.active > 0) return;
+        if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+            setCallError(
+                'Browser calls require microphone access over HTTPS. Open the call centre on a secure connection and allow microphone access.',
+            );
+            return;
+        }
 
+        callStartingRef.current = true;
         setPlacingCall(true);
         setCallError(null);
         setSupervisionError(null);
@@ -232,7 +252,6 @@ export default function CallCenterIndex({
                 turnServer: token.turnServer,
                 audioElement,
             });
-            client.on('error', (error) => setCallError(error.message));
             client.on('session', ({ sessionId }) => {
                 const current = activeCallRef.current;
                 if (current?.client !== client) return;
@@ -247,26 +266,73 @@ export default function CallCenterIndex({
                 const current = activeCallRef.current;
                 if (current?.client === client) setCurrentCall({ ...current, status: 'connected' });
             });
-            client.on('hangup', () => {
+            client.on('hangup', ({ reason, code }) => {
                 if (activeCallRef.current?.client !== client) return;
+                const call = activeCallRef.current;
                 client?.destroy();
                 setCurrentCall(null);
+                callStartingRef.current = false;
+                const hangupDetails = reason ?? code?.toString();
+                setCallError(
+                    call?.status === 'connected'
+                        ? hangupDetails
+                            ? `The call ended: ${hangupDetails}.`
+                            : 'The call ended.'
+                        : hangupDetails
+                          ? `The call ended before connecting: ${hangupDetails}.`
+                          : 'The call ended before connecting. Check the destination and SautiKit account settings, then try again.',
+                );
                 dialForm.reset();
                 router.reload({ only: ['calls', 'stats'] });
             });
+            client.on('declined', ({ reason }) => {
+                if (activeCallRef.current?.client !== client) return;
+                client?.destroy();
+                setCurrentCall(null);
+                callStartingRef.current = false;
+                setCallError(reason ? `The recipient declined the call: ${reason}` : 'The recipient declined the call.');
+                router.reload({ only: ['calls', 'stats'] });
+            });
             await waitForRegistration(client);
-            await refreshAudioOutputs();
-            if (audioElement.setSinkId) await audioElement.setSinkId(audioOutputId);
-            await client.call(to);
+            client.on('error', (error) => setCallError(error.message));
+            client.on('closed', ({ reason }) => {
+                if (activeCallRef.current?.client !== client) return;
+                client?.destroy();
+                setCurrentCall(null);
+                callStartingRef.current = false;
+                setCallError(reason ? `The WebRTC connection closed: ${reason}` : 'The WebRTC connection closed before the call completed.');
+                router.reload({ only: ['calls', 'stats'] });
+            });
             setCurrentCall({ client, to, sessionId: client.sessionId, status: 'calling', muted: false });
+            if (audioElement.setSinkId) {
+                try {
+                    await audioElement.setSinkId(audioOutputId);
+                } catch (error) {
+                    setCallError(error instanceof Error ? error.message : 'Unable to select the audio output. Using the default device.');
+                }
+            }
+            await client.call(to);
+            void refreshAudioOutputs();
             if (client.sessionId) void recordWebRtcCall(to, client.sessionId);
             dialForm.reset();
         } catch (error) {
             client?.destroy();
+            setCurrentCall(null);
             setCallError(error instanceof Error ? error.message : 'Unable to place the call.');
         } finally {
+            callStartingRef.current = false;
             setPlacingCall(false);
         }
+    }
+
+    function startCall(event: React.FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+        void placeCall(dialForm.data.to);
+    }
+
+    function dialContact(contact: Contact) {
+        dialForm.setData('to', contact.phone);
+        void placeCall(contact.phone);
     }
 
     function hangUpActiveCall() {
@@ -275,6 +341,7 @@ export default function CallCenterIndex({
         current.client.hangup();
         current.client.destroy();
         setCurrentCall(null);
+        callStartingRef.current = false;
         router.reload({ only: ['calls', 'stats'] });
     }
 
@@ -427,6 +494,8 @@ export default function CallCenterIndex({
         { label: 'Outbound', value: stats.outbound, icon: ArrowUpRight, tone: 'text-[#9c593d]' },
         { label: 'In progress', value: stats.active, icon: Signal, tone: 'text-[#95631f]' },
     ];
+    const callBlocked = placingCall || activeCall !== null || supervision !== null || stats.active > 0;
+    const directoryContacts = [...contacts.parents, ...contacts.staff].sort((first, second) => first.name.localeCompare(second.name));
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -467,7 +536,11 @@ export default function CallCenterIndex({
                             onClick={toggleSupervisionMute}
                             className="inline-flex items-center gap-1.5 rounded-md border border-[#dfe5dc] bg-white px-3 py-2 text-xs font-semibold text-[#3c6745] disabled:opacity-50"
                         >
-                            {supervision?.muted ? <MicOff aria-hidden="true" className="size-3.5" /> : <Mic aria-hidden="true" className="size-3.5" />}
+                            {supervision?.muted ? (
+                                <MicOff aria-hidden="true" className="size-3.5" />
+                            ) : (
+                                <Mic aria-hidden="true" className="size-3.5" />
+                            )}
                             {supervision?.muted ? 'Unmute' : 'Mute'}
                         </button>
                         {audioOutputs.length > 0 && (
@@ -489,9 +562,9 @@ export default function CallCenterIndex({
                         )}
                     </section>
 
-                    <div className="mt-7 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.72fr)]">
+                    <div className="mt-7 grid gap-5 xl:grid-cols-2">
                         {canManage && (
-                            <section className="rounded-lg border border-[#e3e8df] bg-white p-5 sm:p-6">
+                            <section className="order-2 rounded-lg border border-[#e3e8df] bg-white p-5 sm:p-6 xl:order-2">
                                 <div className="flex items-start gap-3">
                                     <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-[#e5efe3] text-[#397145]">
                                         <PhoneCall aria-hidden="true" className="size-5" />
@@ -522,12 +595,17 @@ export default function CallCenterIndex({
                                     </label>
                                     <button
                                         type="submit"
-                                        disabled={placingCall || activeCall !== null || supervision !== null}
+                                        disabled={callBlocked}
                                         className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md bg-[#244b35] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#193c2a] disabled:opacity-60 sm:mt-5"
                                     >
                                         <PhoneCall aria-hidden="true" className="size-4" /> {placingCall ? 'Connecting…' : 'Call'}
                                     </button>
                                 </form>
+                                {stats.active > 0 && !activeCall && !supervision && (
+                                    <p role="status" className="mt-3 text-sm text-[#95631f]">
+                                        Another call is already in progress. End it before dialing another number.
+                                    </p>
+                                )}
                                 {callError && (
                                     <p role="alert" className="mt-3 text-sm text-red-700">
                                         {callError}
@@ -591,8 +669,48 @@ export default function CallCenterIndex({
                             </section>
                         )}
 
+                        {canManage && (
+                            <section className="order-1 rounded-lg border border-[#e3e8df] bg-white p-5 sm:p-6 xl:order-1">
+                                <div>
+                                    <p className="text-xs font-semibold tracking-[0.12em] text-[#819087] uppercase">School directory</p>
+                                    <h2 className="mt-1 font-serif text-xl text-[#1b3b2b]">Parents and staff</h2>
+                                    <p className="mt-1 text-sm text-[#718076]">
+                                        Numbers are shown with a country code. Select the dial icon to place a call.
+                                    </p>
+                                </div>
+                                {directoryContacts.length ? (
+                                    <ul className="mt-5 divide-y divide-[#edf0eb] rounded-md border border-[#edf0eb]">
+                                        {directoryContacts.map((contact) => (
+                                            <li key={`${contact.role}-${contact.id}`} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                                                <div className="min-w-0">
+                                                    <p className="truncate text-sm font-medium text-[#34483a]">
+                                                        {contact.name} <span className="font-normal text-[#718076]">({contact.role})</span>
+                                                    </p>
+                                                    <p className="mt-0.5 text-xs text-[#718076]">{contact.phone}</p>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    aria-label={`Call ${contact.name} at ${contact.phone}`}
+                                                    title={`Call ${contact.name}`}
+                                                    disabled={callBlocked}
+                                                    onClick={() => dialContact(contact)}
+                                                    className="inline-flex size-9 shrink-0 items-center justify-center rounded-md bg-[#e5efe3] text-[#397145] hover:bg-[#d8e8d4] disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    <PhoneCall aria-hidden="true" className="size-4" />
+                                                </button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                ) : (
+                                    <p className="mt-5 rounded-md bg-[#f8f9f6] px-3 py-4 text-sm text-[#849087]">
+                                        No contacts with callable phone numbers.
+                                    </p>
+                                )}
+                            </section>
+                        )}
+
                         {canConfigureInbound && (
-                            <section className="rounded-lg border border-[#e3e8df] bg-white p-5 sm:p-6">
+                            <section className="rounded-lg border border-[#e3e8df] bg-white p-5 sm:p-6 xl:col-span-2">
                                 <div className="flex items-start gap-3">
                                     <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-[#e6eff5] text-[#38617a]">
                                         <Settings2 aria-hidden="true" className="size-5" />

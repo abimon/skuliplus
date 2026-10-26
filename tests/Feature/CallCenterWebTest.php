@@ -79,6 +79,31 @@ test('the call centre page shows school calls and routing state', function () {
         );
 });
 
+test('the call centre page lists callable parent and staff contacts with country codes', function () {
+    $parent = User::factory()->create([
+        'school_id' => $this->school->id,
+        'phone' => '0722123456',
+        'status' => 'active',
+    ]);
+    $parent->assignRole('parent');
+
+    $staff = User::factory()->create([
+        'school_id' => $this->school->id,
+        'phone' => '+254 700-000-123',
+        'status' => 'active',
+    ]);
+    $staff->assignRole('support_staff');
+
+    $this->actingAs($this->admin)->get('/call-center')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('contacts.parents.0.id', $parent->id)
+            ->where('contacts.parents.0.phone', '+254722123456')
+            ->where('contacts.staff.0.id', $staff->id)
+            ->where('contacts.staff.0.phone', '+254700000123')
+        );
+});
+
 test('an authorized operator can place an outbound call from the call centre', function () {
     Http::fake([
         'https://api.sautikit.com/v1/calls' => Http::response([

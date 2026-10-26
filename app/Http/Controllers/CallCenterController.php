@@ -4,17 +4,17 @@ namespace App\Http\Controllers;
 
 use App\Models\CallCenterCall;
 use App\Models\CallCenterNumber;
+use App\Models\User;
 use App\Services\SautiKit;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
-use Inertia\Response;
 
 class CallCenterController extends Controller
 {
-    public function index(Request $request): Response
+    public function index(Request $request)
     {
         $user = $request->user();
         abort_unless($user->can('call_center.view'), 403);
@@ -32,7 +32,7 @@ class CallCenterController extends Controller
             ->latest()
             ->limit(100)
             ->get()
-            ->map(fn (CallCenterCall $call) => [
+            ->map(fn ($call) => [
                 'id' => $call->id,
                 'direction' => $call->direction,
                 'from' => $call->from_number,
@@ -47,10 +47,47 @@ class CallCenterController extends Controller
             ]);
 
         $number = CallCenterNumber::where('school_id', $schoolId)->first();
+        $contacts = [
+            'parents' => User::query()
+                ->where('school_id', $schoolId)
+                ->where('status', 'active')
+                ->whereNotNull('phone')
+                ->where(fn ($query) => $query->role('parent')->orWhereHas('parentProfile'))
+                ->orderBy('name')
+                ->get(['id', 'name', 'phone'])
+                ->map(fn ($contact) => $this->contactPayload($contact, 'Parent'))
+                ->filter()
+                ->values(),
+            'staff' => User::query()
+                ->where('school_id', $schoolId)
+                ->where('status', 'active')
+                ->whereNotNull('phone')
+                ->where(fn ($query) => $query
+                    ->whereHas('staffProfile')
+                    ->orWhereHas('teacherProfile')
+                    ->orWhereHas('roles', fn ($roles) => $roles->whereIn('name', [
+                        'school_admin',
+                        'hod_academics',
+                        'teacher',
+                        'support_staff',
+                        'librarian',
+                        'lab_technician',
+                        'gatekeeper',
+                        'finance_officer',
+                        'stores_officer',
+                    ])))
+                ->orderBy('name')
+                ->with('roles:id,name')
+                ->get(['id', 'name', 'phone'])
+                ->map(fn (User $contact) => $this->contactPayload($contact, $contact->roles->first()?->name ?? 'Staff'))
+                ->filter()
+                ->values(),
+        ];
 
         return Inertia::render('call-center/index', [
             'school' => $user->school()->first(['name', 'code', 'county', 'logo_path']),
             'calls' => $calls,
+            'contacts' => $contacts,
             'direction' => $data['direction'] ?? 'all',
             'canManage' => $canManage,
             'canConfigureInbound' => $user->hasRole('school_admin'),
@@ -67,7 +104,30 @@ class CallCenterController extends Controller
         ]);
     }
 
-    public function store(Request $request, SautiKit $sautiKit): RedirectResponse
+    private function contactPayload(User $contact, string $role): ?array
+    {
+        $digits = preg_replace('/\D+/', '', $contact->phone ?? '') ?? '';
+        $phone = str_starts_with(trim($contact->phone ?? ''), '+')
+            ? '+'.$digits
+            : (str_starts_with($digits, '00')
+                ? '+'.substr($digits, 2)
+                : (str_starts_with($digits, '254')
+                    ? '+'.$digits
+                    : '+254'.ltrim($digits, '0')));
+
+        if (! preg_match('/^\+[1-9][0-9]{7,14}$/', $phone)) {
+            return null;
+        }
+
+        return [
+            'id' => $contact->id,
+            'name' => $contact->name,
+            'phone' => $phone,
+            'role' => ucwords(str_replace('_', ' ', $role)),
+        ];
+    }
+
+    public function store(Request $request, SautiKit $sautiKit)
     {
         abort_unless($request->user()->can('call_center.manage'), 403);
         $schoolId = $request->user()->school_id;
@@ -82,23 +142,27 @@ class CallCenterController extends Controller
         $idempotencyKey = (string) Str::uuid();
         $response = $sautiKit->originateCall($from, $data['to'], $clientRequestId, $idempotencyKey);
 
-        $call = CallCenterCall::create([
-            'school_id' => $schoolId,
-            'initiated_by' => $request->user()->id,
-            'idempotency_key' => $idempotencyKey,
-            'client_request_id' => $response['client_request_id'] ?? $response['clientRequestId'] ?? $clientRequestId,
-            'provider_call_id' => $response['call_id'] ?? null,
-            'session_id' => $response['session_id'] ?? null,
-            'direction' => 'outbound',
-            'from_number' => $from,
-            'to_number' => $data['to'],
-            'status' => $response['status'] ?? 'initiated',
-            'provider_response' => $response,
-        ]);
+        try{
+            $call = CallCenterCall::create([
+                'school_id' => $schoolId,
+                'initiated_by' => $request->user()->id,
+                'idempotency_key' => $idempotencyKey,
+                'client_request_id' => $response['client_request_id'] ?? $response['clientRequestId'] ?? $clientRequestId,
+                'provider_call_id' => $response['call_id'] ?? null,
+                'session_id' => $response['session_id'] ?? null,
+                'direction' => 'outbound',
+                'from_number' => $from,
+                'to_number' => $data['to'],
+                'status' => $response['status'] ?? 'initiated',
+                'provider_response' => $response,
+            ]);
 
-        $this->associatePendingEvents($call);
+            $this->associatePendingEvents($call);
 
-        return back()->with('success', 'Call placed. Its status will update as SautiKit reports call events.');
+            return back()->with('success', 'Call placed. Its status will update as SautiKit reports call events.');
+        }catch (\Exception $e) {
+            return back()->with('error', 'Failed to place call: '.$e->getMessage());
+        }
     }
 
     public function configureInboundRouting(Request $request, SautiKit $sautiKit): RedirectResponse
