@@ -56,6 +56,15 @@ class CentralManagementController extends ApiController
         return $this->paginated($query->paginate(min((int) $request->integer('per_page', 25), 100)), 'schools');
     }
 
+    public function showSchool(Request $request, School $school): JsonResponse
+    {
+        $this->ensureRole($request, self::CENTRAL_ROLES);
+
+        return $this->ok($this->schoolPayload(
+            $school->load('curricula')->loadCount('users')
+        ));
+    }
+
     public function curricula(Request $request): JsonResponse
     {
         $this->ensureRole($request, self::CENTRAL_ROLES);
@@ -64,6 +73,15 @@ class CentralManagementController extends ApiController
             ->when($request->filled('q'), fn ($q) => $q->where('name', 'like', '%'.$request->input('q').'%'));
 
         return $this->ok($query->get()->map(fn (Curriculum $curriculum) => $this->curriculumPayload($curriculum))->all());
+    }
+
+    public function showCurriculum(Request $request, Curriculum $curriculum): JsonResponse
+    {
+        $this->ensureRole($request, self::CENTRAL_ROLES);
+
+        return $this->ok($this->curriculumPayload(
+            $curriculum->load('levels')->loadCount('schools')
+        ));
     }
 
     public function storeCurriculum(Request $request): JsonResponse
@@ -284,6 +302,12 @@ class CentralManagementController extends ApiController
         return array_merge($school->branding(), [
             'type' => $school->type,
             'level' => $school->level,
+            'moe_code' => $school->moe_code,
+            'knec_code' => $school->knec_code,
+            'sub_county' => $school->sub_county,
+            'ward' => $school->ward,
+            'address' => $school->address,
+            'website' => $school->website,
             'is_active' => (bool) $school->is_active,
             'enabled_modules' => $school->enabledModuleKeys(),
             'users_count' => $school->users_count,

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Models\AcademicYear;
 use App\Models\Book;
 use App\Models\BookLoan;
+use App\Models\CallCenterCall;
 use App\Models\CentralRequest;
 use App\Models\Club;
 use App\Models\Curriculum;
@@ -254,6 +255,17 @@ class DashboardController extends ApiController
                 'stats' => [
                     ['label' => 'Outstanding', 'value' => (float) FeeInvoice::where('school_id', $schoolId)->where('status', '!=', 'paid')->sum('balance')],
                     ['label' => 'Received', 'value' => (float) \App\Models\Payment::where('school_id', $schoolId)->where('status', 'confirmed')->sum('amount')],
+                ],
+            ];
+        }
+
+        if ($user->can('call_center.view')) {
+            $duties[] = [
+                'key' => 'call_center',
+                'title' => 'Call center',
+                'stats' => [
+                    ['label' => 'Calls today', 'value' => CallCenterCall::where('school_id', $schoolId)->whereDate('created_at', today())->count()],
+                    ['label' => 'Inbound', 'value' => CallCenterCall::where('school_id', $schoolId)->where('direction', 'inbound')->count()],
                 ],
             ];
         }

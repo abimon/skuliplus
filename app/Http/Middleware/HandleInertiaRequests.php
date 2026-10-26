@@ -90,6 +90,7 @@ class HandleInertiaRequests extends Middleware
             'stores' => ['Stores', 'stores.view', '/modules/stores'],
             'activities' => ['Activities', 'clubs.view', '/modules/activities'],
             'labs' => ['Laboratories', 'labs.view', '/modules/labs'],
+            'call_center' => ['Call centre', 'call_center.view', '/call-center'],
         ];
         $globallyActive = SchoolModule::where('is_active', true)->pluck('key')->all();
 

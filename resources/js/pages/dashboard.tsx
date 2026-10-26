@@ -17,6 +17,7 @@ import {
     GraduationCap,
     Library,
     ListTree,
+    PhoneCall,
     School,
     Sparkles,
     Trophy,
@@ -179,6 +180,7 @@ const moduleIcons: Record<string, LucideIcon> = {
     stores: Boxes,
     activities: Trophy,
     labs: FlaskConical,
+    call_center: PhoneCall,
 };
 const moduleColors: Record<string, string> = {
     users: 'bg-[#e4f0e9] text-[#236345]',
@@ -193,6 +195,7 @@ const moduleColors: Record<string, string> = {
     stores: 'bg-[#f1eddc] text-[#837328]',
     activities: 'bg-[#f6e5e4] text-[#a34a40]',
     labs: 'bg-[#e9e8f0] text-[#575275]',
+    call_center: 'bg-[#e3edf3] text-[#38617a]',
 };
 const breadcrumbs: BreadcrumbItem[] = [{ title: 'Overview', href: '/dashboard' }];
 

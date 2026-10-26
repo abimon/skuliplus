@@ -28,6 +28,7 @@ class RolePermissionSeeder extends Seeder
             'stores.view', 'stores.manage',
             'clubs.view', 'clubs.manage',
             'labs.view', 'labs.manage',
+            'call_center.view', 'call_center.manage',
         ];
 
         foreach ($permissions as $permission) {
@@ -49,7 +50,7 @@ class RolePermissionSeeder extends Seeder
             'gatekeeper' => ['gate.view', 'gate.manage'],
             'finance_officer' => ['finance.view', 'finance.manage', 'payments.record', 'users.view'],
             'stores_officer' => ['stores.view', 'stores.manage'],
-            'support_staff' => [],
+            'support_staff' => ['call_center.view', 'call_center.manage'],
         ];
 
         foreach ($map as $role => $perms) {

@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AcademicsController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\CallCenterController;
 use App\Http\Controllers\Api\CentralManagementController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\FamilyController;
@@ -25,6 +26,9 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::post('auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+Route::post('webhooks/sautikit', [CallCenterController::class, 'webhook'])
+    ->middleware('throttle:120,1')
+    ->name('api.sautikit.webhook');
 
 Route::middleware(['auth:sanctum', 'abilities:mobile'])->group(function () {
     // Session --------------------------------------------------------------
@@ -46,6 +50,12 @@ Route::middleware(['auth:sanctum', 'abilities:mobile'])->group(function () {
     // Home --------------------------------------------------------------------
     Route::get('dashboard', DashboardController::class);
 
+    // Call center -------------------------------------------------------------
+    Route::get('call-center/calls', [CallCenterController::class, 'index']);
+    Route::post('call-center/calls', [CallCenterController::class, 'store']);
+    Route::get('call-center/inbound-routing', [CallCenterController::class, 'inboundRouting']);
+    Route::put('call-center/inbound-routing', [CallCenterController::class, 'configureInboundRouting']);
+
     // Offline cache and queued writes -------------------------------------------
     Route::get('sync/status', [SyncController::class, 'status']);
     Route::get('sync/pull', [SyncController::class, 'pull']);
@@ -54,10 +64,12 @@ Route::middleware(['auth:sanctum', 'abilities:mobile'])->group(function () {
     Route::prefix('central')->group(function () {
         Route::get('/', [CentralManagementController::class, 'index']);
         Route::get('schools', [CentralManagementController::class, 'schools']);
+        Route::get('schools/show/{school}', [CentralManagementController::class, 'showSchool']);
         Route::post('schools', [CentralManagementController::class, 'storeSchool']);
         Route::put('schools/{school}', [CentralManagementController::class, 'updateSchool']);
         Route::patch('schools/{school}/status', [CentralManagementController::class, 'setSchoolStatus']);
         Route::get('curricula', [CentralManagementController::class, 'curricula']);
+        Route::get('curricula/{curriculum}', [CentralManagementController::class, 'showCurriculum']);
         Route::post('curricula', [CentralManagementController::class, 'storeCurriculum']);
         Route::put('curricula/{curriculum}', [CentralManagementController::class, 'updateCurriculum']);
         Route::post('curricula/{curriculum}/levels', [CentralManagementController::class, 'storeLevel']);
@@ -131,5 +143,5 @@ Route::middleware(['auth:sanctum', 'abilities:mobile'])->group(function () {
         Route::get('children/{student}', [FamilyController::class, 'child']);
     });
 
-    Route::get('user', fn (Request $request) => $request->user());
+    Route::get('user', fn(Request $request) => $request->user());
 });

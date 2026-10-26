@@ -18,6 +18,7 @@ class School extends Model
         'stores' => 'Stores',
         'activities' => 'Activities',
         'labs' => 'Laboratories',
+        'call_center' => 'Call center',
     ];
 
     protected $guarded = [];

@@ -3,6 +3,7 @@
 use App\Http\Controllers\AcademicController;
 use App\Http\Controllers\AssessmentController;
 use App\Http\Controllers\BrandingController;
+use App\Http\Controllers\CallCenterController;
 use App\Http\Controllers\CentralManagementController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\FinanceController;
@@ -48,6 +49,15 @@ Route::middleware(['auth'])->group(function () {
         Route::post('finance/withdrawals', [FinanceController::class, 'storeWithdrawal'])->name('finance.withdrawals.store');
         Route::get('finance/payments/{payment}/receipt', [FinanceController::class, 'receipt'])->name('finance.receipt');
         Route::get('finance/payments/{payment}/receipt.pdf', [FinanceController::class, 'downloadReceipt'])->name('finance.receipt.download');
+    });
+    Route::middleware('school.module:call_center')->group(function () {
+        Route::get('call-center', [CallCenterController::class, 'index'])->name('call-center.index');
+        Route::post('call-center/calls', [CallCenterController::class, 'store'])->name('call-center.calls.store');
+        Route::get('call-center/webrtc-token', [CallCenterController::class, 'webrtcToken'])->name('call-center.webrtc-token');
+        Route::post('call-center/calls/{providerCallId}/supervision', [CallCenterController::class, 'startSupervision'])->name('call-center.supervision.start');
+        Route::patch('call-center/calls/{providerCallId}/supervision', [CallCenterController::class, 'setSupervisionMode'])->name('call-center.supervision.mode');
+        Route::delete('call-center/calls/{providerCallId}/supervision', [CallCenterController::class, 'stopSupervision'])->name('call-center.supervision.stop');
+        Route::put('call-center/inbound-routing', [CallCenterController::class, 'configureInboundRouting'])->name('call-center.inbound-routing.update');
     });
     Route::get('modules/{module}', [OperationsController::class, 'index'])->middleware('school.module')->name('operations.index');
     Route::post('modules/{module}', [OperationsController::class, 'store'])->middleware('school.module')->name('operations.store');

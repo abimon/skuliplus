@@ -3,7 +3,7 @@ import { NavUser } from '@/components/nav-user';
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
 import { type NavItem } from '@/types';
 import { Link, usePage } from '@inertiajs/react';
-import { Bell, BookOpen, Boxes, Building2, DoorOpen, FlaskConical, GraduationCap, LayoutGrid, Library, ListTree, Trophy, Users, Wallet } from 'lucide-react';
+import { Bell, BookOpen, Boxes, Building2, DoorOpen, FlaskConical, GraduationCap, LayoutGrid, Library, ListTree, PhoneCall, Trophy, Users, Wallet } from 'lucide-react';
 import AppLogo from './app-logo';
 
 const moduleIcons = {
@@ -20,6 +20,7 @@ const moduleIcons = {
     stores: Boxes,
     activities: Trophy,
     labs: FlaskConical,
+    call_center: PhoneCall,
     management: Bell,
     'school-setup': Building2,
 } as const;

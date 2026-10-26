@@ -11,11 +11,11 @@ import { useInitials } from '@/hooks/use-initials';
 import { cn } from '@/lib/utils';
 import { type BreadcrumbItem, type NavItem, type SharedData } from '@/types';
 import { Link, usePage } from '@inertiajs/react';
-import { Bell, BookOpen, Boxes, Building2, DoorOpen, FlaskConical, Folder, GraduationCap, LayoutGrid, Library, ListTree, Menu, Trophy, Users, Wallet } from 'lucide-react';
+import { Bell, BookOpen, Boxes, Building2, DoorOpen, FlaskConical, Folder, GraduationCap, LayoutGrid, Library, ListTree, Menu, PhoneCall, Trophy, Users, Wallet } from 'lucide-react';
 import AppLogo from './app-logo';
 import AppLogoIcon from './app-logo-icon';
 
-const navIcons = { dashboard: LayoutGrid, users: Users, academics: GraduationCap, finance: Wallet, library: Library, gate: DoorOpen, stores: Boxes, activities: Trophy, labs: FlaskConical, promotions: GraduationCap, schools: Building2, curricula: ListTree, management: Bell, 'school-setup': Building2 } as const;
+const navIcons = { dashboard: LayoutGrid, users: Users, academics: GraduationCap, finance: Wallet, library: Library, gate: DoorOpen, stores: Boxes, activities: Trophy, labs: FlaskConical, call_center: PhoneCall, promotions: GraduationCap, schools: Building2, curricula: ListTree, management: Bell, 'school-setup': Building2 } as const;
 
 const rightNavItems: NavItem[] = [
     {

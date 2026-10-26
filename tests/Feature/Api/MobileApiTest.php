@@ -20,7 +20,7 @@ beforeEach(function () {
     $this->school = School::create([
         'code' => 'APITEST',
         'name' => 'Api Test School',
-        'enabled_modules' => ['users', 'academics', 'finance', 'library', 'gate', 'stores', 'activities', 'labs'],
+        'enabled_modules' => ['users', 'academics', 'finance', 'library', 'gate', 'stores', 'activities', 'labs', 'call_center'],
     ]);
 
     $this->makeUser = function (string $role, array $attributes = []) {
@@ -180,6 +180,45 @@ test('the dashboard adapts its shape to each interface', function () {
         ->assertJsonStructure(['data' => ['staff' => ['duties']]]);
 });
 
+test('super admins can open a school detail including modules and branding', function () {
+    $this->school->update([
+        'motto' => 'Learn and grow',
+        'enabled_modules' => ['users', 'gate', 'call_center'],
+    ]);
+    $central = User::factory()->create(['school_id' => null]);
+    $central->assignRole('super_admin');
+    mobileAs($central);
+
+    $this->getJson("/api/central/schools/{$this->school->id}")
+        ->assertOk()
+        ->assertJsonPath('data.name', 'Api Test School')
+        ->assertJsonPath('data.motto', 'Learn and grow')
+        ->assertJsonPath('data.enabled_modules.1', 'gate')
+        ->assertJsonPath('data.enabled_modules.2', 'call_center');
+});
+
+test('super admins can open curriculum details with levels', function () {
+    $curriculum = \App\Models\Curriculum::create([
+        'code' => 'DETAILS',
+        'name' => 'Curriculum details',
+        'is_active' => true,
+    ]);
+    $curriculum->levels()->create([
+        'code' => 'L1',
+        'name' => 'Level one',
+        'stage' => 'Primary',
+        'order' => 1,
+    ]);
+    $central = User::factory()->create(['school_id' => null]);
+    $central->assignRole('super_admin');
+    mobileAs($central);
+
+    $this->getJson("/api/central/curricula/{$curriculum->id}")
+        ->assertOk()
+        ->assertJsonPath('data.name', 'Curriculum details')
+        ->assertJsonPath('data.levels.0.name', 'Level one');
+});
+
 test('central management endpoints are closed to school staff', function () {
     mobileAs(($this->makeUser)('school_admin'));
 
@@ -262,6 +301,14 @@ test('support staff cannot record results', function () {
         'subject_id' => 1,
         'score' => 70,
     ])->assertForbidden();
+});
+
+test('dashboard exposes the call center only to users with call center access', function () {
+    mobileAs(($this->makeUser)('support_staff'));
+
+    $this->getJson('/api/dashboard')
+        ->assertOk()
+        ->assertJsonFragment(['key' => 'call_center', 'title' => 'Call center']);
 });
 
 test('operation modules reject those the school has not enabled', function () {

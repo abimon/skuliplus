@@ -35,6 +35,13 @@ return [
         'endpoint' => env('AFRICASTALKING_ENDPOINT', 'https://api.africastalking.com/version1/messaging'),
     ],
 
+    'sautikit' => [
+        'base_url' => env('SAUTIKIT_BASE_URL', 'https://api.sautikit.com'),
+        'api_key' => env('SAUTIKIT_API_KEY'),
+        'from_number' => env('SAUTIKIT_FROM_NUMBER'),
+        'webhook_secret' => env('SAUTIKIT_WEBHOOK_SECRET'),
+    ],
+
     'schoolms' => [
         'inquiry_email' => env('SCHOOLMS_INQUIRY_EMAIL'),
     ],

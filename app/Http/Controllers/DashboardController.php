@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\AcademicYear;
 use App\Models\BookLoan;
+use App\Models\CallCenterCall;
 use App\Models\CentralRequest;
 use App\Models\Club;
 use App\Models\Curriculum;
@@ -97,6 +98,7 @@ class DashboardController extends Controller
                 ['key' => 'stores', 'name' => 'Stores', 'description' => 'School-wide stock and supplies', 'icon' => 'boxes', 'permission' => 'stores.view', 'value' => StoreItem::where('school_id', $schoolId)->whereColumn('quantity', '<=', 'reorder_level')->count(), 'unit' => 'low-stock items'],
                 ['key' => 'activities', 'name' => 'Activities', 'description' => 'Clubs, sports and school life', 'icon' => 'trophy', 'permission' => 'clubs.view', 'value' => Club::where('school_id', $schoolId)->count(), 'unit' => 'clubs'],
                 ['key' => 'labs', 'name' => 'Laboratories', 'description' => 'Practical learning and equipment', 'icon' => 'flask-conical', 'permission' => 'labs.view', 'value' => Lab::where('school_id', $schoolId)->count(), 'unit' => 'labs'],
+                ['key' => 'call_center', 'name' => 'Call centre', 'description' => 'Inbound and outbound calls and call history', 'icon' => 'phone-call', 'permission' => 'call_center.view', 'value' => CallCenterCall::where('school_id', $schoolId)->count(), 'unit' => 'calls', 'href' => '/call-center'],
             ];
 
             $modulePrices = SchoolModule::pluck('price_kes', 'key');
