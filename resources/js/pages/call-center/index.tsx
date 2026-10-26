@@ -467,8 +467,8 @@ export default function CallCenterIndex({
                             onClick={toggleSupervisionMute}
                             className="inline-flex items-center gap-1.5 rounded-md border border-[#dfe5dc] bg-white px-3 py-2 text-xs font-semibold text-[#3c6745] disabled:opacity-50"
                         >
-                            {supervision.muted ? <MicOff aria-hidden="true" className="size-3.5" /> : <Mic aria-hidden="true" className="size-3.5" />}
-                            {supervision.muted ? 'Unmute' : 'Mute'}
+                            {supervision?.muted ? <MicOff aria-hidden="true" className="size-3.5" /> : <Mic aria-hidden="true" className="size-3.5" />}
+                            {supervision?.muted ? 'Unmute' : 'Mute'}
                         </button>
                         {audioOutputs.length > 0 && (
                             <label className="flex items-center gap-1.5 text-xs text-[#657469]">
